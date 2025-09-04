@@ -2,6 +2,8 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const axios = require("axios");
 const app = express();
+const response = await axios.post(moodleApiUrl, params);
+console.log("Moodle API response:", response.data);
 
 app.use(bodyParser.json());
 
