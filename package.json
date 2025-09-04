@@ -2,6 +2,7 @@
   "name": "line-bot",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "commonjs",   ← これを追加！
   "scripts": {
     "start": "node index.js"
   },
