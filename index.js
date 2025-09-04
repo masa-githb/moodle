@@ -7,7 +7,7 @@ app.use(bodyParser.json());
 
 // 環境変数からトークンを取得
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
-const MOODLE_URL = "https://<MoodleサイトURL>/webservice/rest/server.php";
+const MOODLE_URL = "https://tsurunosono2.xo.je/webservice/rest/server.php";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
 // LINE Webhook
