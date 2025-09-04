@@ -1,72 +1,70 @@
-// index.js
 import express from "express";
 import axios from "axios";
+import bodyParser from "body-parser";
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-// 環境変数から取得
-const MOODLE_URL = process.env.MOODLE_URL; // Moodle サイト URL
-const MOODLE_TOKEN = process.env.MOODLE_TOKEN; // Moodle 発行トークン
-const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // LINE BOT トークン
+// 環境変数から設定（Render の Environment Variables に入れる）
+const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const MOODLE_URL = process.env.MOODLE_URL; // 例: "https://sandbox.moodledemo.net"
+const MOODLE_TOKEN = process.env.MOODLE_TOKEN; // 発行したトークン
 
-// LINE BOT の Webhook
+// LINE 受信エンドポイント
 app.post("/webhook", async (req, res) => {
-  try {
-    const replyToken = req.body?.events?.[0]?.replyToken;
+  const events = req.body.events;
 
-    if (!replyToken) {
-      console.log("replyToken がありません");
-      return res.sendStatus(400);
-    }
+  for (let event of events) {
+    if (event.type === "message" && event.message.type === "text") {
+      if (event.message.text === "問題ちょうだい") {
+        try {
+          // Moodle API 呼び出し
+          const params = {
+            wstoken: MOODLE_TOKEN,
+            wsfunction: "core_question_get_questions",
+            moodlewsrestformat: "json",
+            // 必要に応じて質問IDやカテゴリIDを指定
+            questionids: [1]  // ←テスト用にID 1 を取得
+          };
 
-    // Moodle API に問題をリクエスト
-    const params = {
-      wstoken: MOODLE_TOKEN,
-      wsfunction: "core_question_get_questions", // 使用したい関数に置き換え
-      moodlewsrestformat: "json",
-      // 他に必要なパラメータをここに追加
-    };
+          const response = await axios.get(
+            `${MOODLE_URL}/webservice/rest/server.php`,
+            { params }
+          );
 
-    console.log("Moodle API リクエストパラメータ:", params);
+          const data = response.data;
+          console.log("Moodle response:", data);
 
-    const response = await axios.get(MOODLE_URL + "/webservice/rest/server.php", {
-      params
-    });
+          let replyText = "問題を取得できませんでした";
 
-    console.log("Moodle API response:", response.data);
+          if (data.questions && data.questions.length > 0) {
+            const q = data.questions[0];
+            replyText = `問題: ${q.name}\n\n${q.questiontext}`;
+          }
 
-    let messageText = "Moodleから問題を取得しました ✅";
-
-    if (!response.data || response.data.exception) {
-      console.log("Moodle API エラー:", response.data);
-      messageText = "Moodleから問題を取得できませんでした 🙇‍♂️";
-    }
-
-    // LINE へ返信
-    await axios.post(
-      "https://api.line.me/v2/bot/message/reply",
-      {
-        replyToken: replyToken,
-        messages: [{ type: "text", text: messageText }]
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`
+          // LINE に返信
+          await axios.post(
+            "https://api.line.me/v2/bot/message/reply",
+            {
+              replyToken: event.replyToken,
+              messages: [{ type: "text", text: replyText }],
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+              },
+            }
+          );
+        } catch (error) {
+          console.error("Moodle API Error:", error.message);
         }
       }
-    );
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("エラー:", err);
-    res.sendStatus(500);
+    }
   }
+
+  res.sendStatus(200);
 });
 
-// サーバ起動
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
 });
