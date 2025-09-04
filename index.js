@@ -1,54 +1,72 @@
+// index.js
 import express from "express";
 import axios from "axios";
-import bodyParser from "body-parser";
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
-const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
-const MOODLE_URL = process.env.MOODLE_URL; // https://tsurunosono2.xo.je/webservice/rest/server.php
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+// 環境変数から取得
+const MOODLE_URL = process.env.MOODLE_URL; // Moodle サイト URL
+const MOODLE_TOKEN = process.env.MOODLE_TOKEN; // Moodle 発行トークン
+const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // LINE BOT トークン
 
+// LINE BOT の Webhook
 app.post("/webhook", async (req, res) => {
-  const replyToken = req.body?.events?.[0]?.replyToken;
-
-  if (!replyToken) {
-    return res.sendStatus(400);
-  }
-
   try {
-    // Moodle API へ問題リクエスト
-    const moodleResponse = await axios.get(MOODLE_URL, {
-      params: {
-        wstoken: MOODLE_TOKEN,
-        wsfunction: "mod_quiz_get_random_questions",
-        quizid: 1,
-        moodlewsrestformat: "json"
-      }
+    const replyToken = req.body?.events?.[0]?.replyToken;
+
+    if (!replyToken) {
+      console.log("replyToken がありません");
+      return res.sendStatus(400);
+    }
+
+    // Moodle API に問題をリクエスト
+    const params = {
+      wstoken: MOODLE_TOKEN,
+      wsfunction: "core_question_get_questions", // 使用したい関数に置き換え
+      moodlewsrestformat: "json",
+      // 他に必要なパラメータをここに追加
+    };
+
+    console.log("Moodle API リクエストパラメータ:", params);
+
+    const response = await axios.get(MOODLE_URL + "/webservice/rest/server.php", {
+      params
     });
 
-    const questions = moodleResponse.data?.questions || [];
-    let text = "Moodleから問題を取得できませんでした 🙇‍♂️";
+    console.log("Moodle API response:", response.data);
 
-    if (questions.length > 0) {
-      text = `問題: ${questions[0].questiontext}\n選択肢: ${questions[0].answers.map(a => a.answer).join(", ")}`;
+    let messageText = "Moodleから問題を取得しました ✅";
+
+    if (!response.data || response.data.exception) {
+      console.log("Moodle API エラー:", response.data);
+      messageText = "Moodleから問題を取得できませんでした 🙇‍♂️";
     }
 
     // LINE へ返信
-    await axios.post("https://api.line.me/v2/bot/message/reply", {
-      replyToken,
-      messages: [{ type: "text", text }]
-    }, {
-      headers: { Authorization: `Bearer ${LINE_TOKEN}`, "Content-Type": "application/json" }
-    });
+    await axios.post(
+      "https://api.line.me/v2/bot/message/reply",
+      {
+        replyToken: replyToken,
+        messages: [{ type: "text", text: messageText }]
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`
+        }
+      }
+    );
 
     res.sendStatus(200);
-
   } catch (err) {
-    console.error(err.response?.data || err.message);
+    console.error("エラー:", err);
     res.sendStatus(500);
   }
 });
 
+// サーバ起動
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
