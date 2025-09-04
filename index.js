@@ -1,73 +1,95 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const axios = require("axios");
+// index.js
+import express from "express";
+import axios from "axios";
+import bodyParser from "body-parser";
 
 const app = express();
 app.use(bodyParser.json());
 
+const PORT = process.env.PORT || 3000;
+
 // 環境変数からトークンを取得
-const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
-const MOODLE_URL = "https://tsurunosono2.xo.je/webservice/rest/server.php";
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 
-// LINE Webhook
-app.post("/webhook", async (req, res) => {
+// Moodle API URL
+const MOODLE_URL = "https://tsurunosono2.xo.je/webservice/rest/server.php";
+
+// LINE メッセージ送信関数
+async function replyToLine(replyToken, message) {
   try {
-    const events = req.body.events || [];
+    await axios.post(
+      "https://api.line.me/v2/bot/message/reply",
+      {
+        replyToken: replyToken,
+        messages: [{ type: "text", text: message }],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (err) {
+    console.error("LINE API error:", err.response?.data || err.message);
+  }
+}
 
-    for (const event of events) {
-      const userMessage = event.message?.text;
+// LINE webhook
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200); // LINE に200を返す
 
-      if (userMessage === "問題") {
-        // Moodle API パラメータ
-        const params = new URLSearchParams();
-        params.append("wstoken", MOODLE_TOKEN);
-        params.append("wsfunction", "mod_quiz_get_random_questions");
-        params.append("moodlewsrestformat", "json");
+  const events = req.body.events;
+  if (!events) return;
 
-        // Moodle API 呼び出し
-        const response = await axios.post(MOODLE_URL, params);
-        const questions = response.data.questions || [];
+  for (const event of events) {
+    if (event.type === "message" && event.message.type === "text") {
+      const userMessage = event.message.text;
+      const replyToken = event.replyToken;
 
-        if (questions.length === 0) {
-          await axios.post(
-            "https://api.line.me/v2/bot/message/reply",
-            {
-              replyToken: event.replyToken,
-              messages: [
-                { type: "text", text: "Moodleから問題を取得できませんでした 🙇‍♂️" },
-              ],
-            },
-            { headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` } }
-          );
-          continue;
+      if (userMessage.toLowerCase() === "問題") {
+        try {
+          // Moodle API リクエストパラメータ
+          const params = new URLSearchParams();
+          params.append("wstoken", MOODLE_TOKEN);
+          params.append("wsfunction", "mod_quiz_get_random_questions"); // Moodleで有効な関数名に変更
+          params.append("moodlewsrestformat", "json");
+
+          // Moodle API へリクエスト
+          const response = await axios.post(MOODLE_URL, params, {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          });
+
+          console.log("Moodle API response:", response.data);
+
+          const questions = response.data.questions;
+          if (!questions || questions.length === 0) {
+            await replyToLine(replyToken, "Moodleから問題を取得できませんでした 🙇‍♂️");
+            continue;
+          }
+
+          const question = questions[0]; // とりあえず最初の問題を取得
+          const questionText = question.questiontext || "問題文がありません";
+          await replyToLine(replyToken, `問題: ${questionText}`);
+
+          // 選択肢がある場合
+          if (question.answers) {
+            const choices = question.answers.map((a, i) => `${i + 1}. ${a.answertext}`).join("\n");
+            await replyToLine(replyToken, `選択肢:\n${choices}`);
+          }
+
+        } catch (err) {
+          console.error("Moodle API error:", err.response?.data || err.message);
+          await replyToLine(replyToken, "Moodleから問題を取得できませんでした 🙇‍♂️");
         }
-
-        // 1問目を取得
-        const q = questions[0];
-        const text = `${q.questiontext}\nA) ${q.answers[0]}\nB) ${q.answers[1]}\nC) ${q.answers[2]}\nD) ${q.answers[3]}`;
-
-        // LINEに返信
-        await axios.post(
-          "https://api.line.me/v2/bot/message/reply",
-          {
-            replyToken: event.replyToken,
-            messages: [{ type: "text", text }],
-          },
-          { headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` } }
-        );
+      } else {
+        await replyToLine(replyToken, "「問題」と送るとクイズが返ってきます");
       }
     }
-
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("Error");
   }
 });
 
-// ポート設定
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
