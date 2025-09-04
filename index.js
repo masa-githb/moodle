@@ -1,7 +1,7 @@
 // index.js
-import express from "express";
-import axios from "axios";
-import bodyParser from "body-parser";
+const express = require("express");
+const axios = require("axios");
+const bodyParser = require("body-parser");
 
 const app = express();
 app.use(bodyParser.json());
@@ -57,7 +57,7 @@ app.post("/webhook", async (req, res) => {
           params.append("moodlewsrestformat", "json");
 
           // Moodle API へリクエスト
-          const response = await axios.post(MOODLE_URL, params, {
+          const response = await axios.post(MOODLE_URL, params.toString(), {
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
           });
 
