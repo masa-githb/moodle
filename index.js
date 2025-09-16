@@ -5,12 +5,12 @@ import bodyParser from "body-parser";
 const app = express();
 app.use(bodyParser.json());
 
-// 環境変数から設定（Render の Environment Variables に入れる）
+// 環境変数から設定
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const MOODLE_URL = process.env.MOODLE_URL; // 例: "https://sandbox.moodledemo.net"
-const MOODLE_TOKEN = process.env.MOODLE_TOKEN; // 発行したトークン
+const MOODLE_URL = process.env.MOODLE_URL;      // 例: "https://your-moodle-site"
+const MOODLE_TOKEN = process.env.MOODLE_TOKEN;  // Moodle で発行したトークン
 
-// LINE 受信エンドポイント
+// LINE Webhook
 app.post("/webhook", async (req, res) => {
   const events = req.body.events;
 
@@ -18,13 +18,11 @@ app.post("/webhook", async (req, res) => {
     if (event.type === "message" && event.message.type === "text") {
       if (event.message.text === "問題ちょうだい") {
         try {
-          // Moodle API 呼び出し
+          // Moodle API を呼び出し
           const params = {
             wstoken: MOODLE_TOKEN,
-            wsfunction: "core_question_get_questions",
-            moodlewsrestformat: "json",
-            // 必要に応じて質問IDやカテゴリIDを指定
-            questionids: [1]  // ←テスト用にID 1 を取得
+            wsfunction: "local_questionapi_get_random_question",
+            moodlewsrestformat: "json"
           };
 
           const response = await axios.get(
@@ -37,9 +35,8 @@ app.post("/webhook", async (req, res) => {
 
           let replyText = "問題を取得できませんでした";
 
-          if (data.questions && data.questions.length > 0) {
-            const q = data.questions[0];
-            replyText = `問題: ${q.name}\n\n${q.questiontext}`;
+          if (data && data.id) {
+            replyText = `問題: ${data.name}\n\n${data.questiontext}`;
           }
 
           // LINE に返信
@@ -56,7 +53,7 @@ app.post("/webhook", async (req, res) => {
             }
           );
         } catch (error) {
-          console.error("Moodle API Error:", error.message);
+          console.error("Moodle API Error:", error.response?.data || error.message);
         }
       }
     }
