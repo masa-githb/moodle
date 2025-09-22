@@ -84,9 +84,7 @@ async function replyLine(replyToken, message) {
   });
 }
 
-// Render が割り当てたポートを使用
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
