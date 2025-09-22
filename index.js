@@ -84,4 +84,7 @@ async function replyLine(replyToken, message) {
   });
 }
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+const PORT = process.env.PORT || 3000;  // Render 環境変数 PORT を優先
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
