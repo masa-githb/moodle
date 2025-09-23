@@ -13,9 +13,11 @@ const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 const userSession = {};
 
 app.post("/webhook", async (req, res) => {
+  console.log("Webhook received:", JSON.stringify(req.body, null, 2));  // ★ログ追加
   const events = req.body.events;
 
   for (let event of events) {
+    console.log("Event type:", event.type, "Message:", event.message?.text);  // ★ログ追加
     if (event.type === "message" && event.message.type === "text") {
       const userId = event.source.userId;
       const text = event.message.text.trim();
