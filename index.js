@@ -23,14 +23,17 @@ app.post("/webhook", async (req, res) => {
       const text = event.message.text.trim();
 
       if (text === "問題ちょうだい") {
-        try {
-          const response = await axios.get(`${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`);
-          const data = response.data;
+  　　　try {
+    　　　const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
+    　　　console.log("Moodle API URL:", url); // ★確認用
+    　　　const response = await axios.get(url);
+    　　　const data = response.data;
+    　　　console.log("Moodle response:", JSON.stringify(data, null, 2)); // ★確認用
 
-          if (!data || !data.choices || data.choices.length === 0) {
-            await replyLine(event.replyToken, "問題を取得できませんでした。");
-            continue;
-          }
+    if (!data || !data.choices || data.choices.length === 0) {
+      await replyLine(event.replyToken, "問題を取得できませんでした。");
+      continue;
+    }
 
           // ユーザーセッションに保存
           userSession[userId] = data;
