@@ -12,6 +12,12 @@ const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 // メモリで回答を保持（簡易版）
 const userSession = {};
 
+// ★ Render スリープ解除用ルート
+app.get("/", (req, res) => {
+  res.send("RENDER ACTIVE: OK");
+});
+
+// LINE webhook
 app.post("/webhook", async (req, res) => {
   console.log("Webhook received:", JSON.stringify(req.body, null, 2));  // ★ログ追加
   const events = req.body.events;
@@ -23,17 +29,17 @@ app.post("/webhook", async (req, res) => {
       const text = event.message.text.trim();
 
       if (text === "問題ちょうだい") {
-  　　　try {
-    　　　const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
-    　　　console.log("Moodle API URL:", url); // ★確認用
-    　　　const response = await axios.get(url);
-    　　　const data = response.data;
-    　　　console.log("Moodle response:", JSON.stringify(data, null, 2)); // ★確認用
+        try {
+          const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
+          console.log("Moodle API URL:", url); // ★確認用
+          const response = await axios.get(url);
+          const data = response.data;
+          console.log("Moodle response:", JSON.stringify(data, null, 2)); // ★確認用
 
-    if (!data || !data.choices || data.choices.length === 0) {
-      await replyLine(event.replyToken, "問題を取得できませんでした。");
-      continue;
-    }
+          if (!data || !data.choices || data.choices.length === 0) {
+            await replyLine(event.replyToken, "問題を取得できませんでした。");
+            continue;
+          }
 
           // ユーザーセッションに保存
           userSession[userId] = data;
