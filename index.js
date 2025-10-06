@@ -1,140 +1,131 @@
 import express from "express";
 import axios from "axios";
 import bodyParser from "body-parser";
-import cheerio from "cheerio";  // ← HTMLパース用 (npm install cheerio)
+import * as cheerio from "cheerio"; // ← 修正ポイント
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 app.use(bodyParser.json());
 
+// 環境変数
 const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 const MOODLE_URL = process.env.MOODLE_URL;
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 
-// メモリで回答を保持（簡易版）
+// 簡易メモリセッション
 const userSession = {};
 
-// ★ Render スリープ解除用ルート
-app.get("/", (req, res) => {
-  res.send("RENDER ACTIVE: OK");
-});
-
-// LINE webhook
+// LINE 署名検証は省略（Renderなど無料サーバー用に軽量化）
 app.post("/webhook", async (req, res) => {
-  console.log("Webhook received:", JSON.stringify(req.body, null, 2));
-  const events = req.body.events;
+  try {
+    const events = req.body.events;
 
-  for (let event of events) {
-    console.log("Event type:", event.type, "Message:", event.message?.text);
+    for (const event of events) {
+      // メッセージイベントのみ処理
+      if (event.type === "message" && event.message.type === "text") {
+        const userMessage = event.message.text.trim();
+        const userId = event.source.userId;
 
-    if (event.type === "message" && event.message.type === "text") {
-      const userId = event.source.userId;
-      const text = event.message.text.trim();
+        // ユーザーセッションの初期化
+        if (!userSession[userId]) {
+          userSession[userId] = {};
+        }
 
-      // ===========================
-      // 問題取得
-      // ===========================
-      if (text === "問題ちょうだい") {
-        try {
-          const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
-          console.log("Moodle API URL:", url);
+        if (userMessage === "問題") {
+          // Moodle から問題を取得
+          const question = await getRandomQuestionFromMoodle();
 
-          const response = await axios.get(url);
-          const data = response.data;
-          console.log("Moodle response:", JSON.stringify(data, null, 2));
-
-          if (!data || !data.choices || data.choices.length === 0) {
-            await replyLine(event.replyToken, [
-              { type: "text", text: "問題を取得できませんでした。" }
-            ]);
-            continue;
-          }
-
-          // HTMLをパース
-          const $ = cheerio.load(data.questiontext || "");
-          const questionText = $.text().trim(); // タグ除去してテキスト抽出
-          const imgUrl = $("img").attr("src");  // 最初の画像URL
+          // LINEで表示しやすい形式に整形
+          const cleanQuestion = formatQuestionText(question);
 
           // ユーザーセッションに保存
-          userSession[userId] = data;
+          userSession[userId].question = question;
 
-          // 選択肢を番号付きで表示
-          let messageText = `問題: ${questionText}\n`;
-          data.choices.forEach((c, i) => {
-            messageText += `${i + 1}. ${c.answer}\n`;
-          });
+          await replyMessage(event.replyToken, cleanQuestion);
+        } else if (userSession[userId].question) {
+          // 回答チェック
+          const isCorrect = checkAnswer(userSession[userId].question, userMessage);
+          const reply = isCorrect ? "⭕正解です！" : "❌不正解です。";
+          await replyMessage(event.replyToken, reply);
 
-          // LINE送信用メッセージ配列
-          const messages = [{ type: "text", text: messageText }];
-
-          // 画像がある場合は追加
-          if (imgUrl) {
-            messages.push({
-              type: "image",
-              originalContentUrl: imgUrl,
-              previewImageUrl: imgUrl
-            });
-          }
-
-          await replyLine(event.replyToken, messages);
-
-        } catch (err) {
-          console.error(err);
-          await replyLine(event.replyToken, [
-            { type: "text", text: "API エラーが発生しました。" }
-          ]);
+          // セッションをリセット
+          delete userSession[userId].question;
+        } else {
+          await replyMessage(event.replyToken, "「問題」と送るとクイズが始まります！");
         }
-      }
-
-      // ===========================
-      // 回答処理
-      // ===========================
-      else if (/^[1-9]\d*$/.test(text)) {
-        const session = userSession[userId];
-        if (!session) {
-          await replyLine(event.replyToken, [
-            { type: "text", text: "先に「問題ちょうだい」と送ってください。" }
-          ]);
-          continue;
-        }
-
-        const choiceIndex = parseInt(text, 10) - 1;
-        if (choiceIndex < 0 || choiceIndex >= session.choices.length) {
-          await replyLine(event.replyToken, [
-            { type: "text", text: "番号が不正です。" }
-          ]);
-          continue;
-        }
-
-        const choice = session.choices[choiceIndex];
-        const correct = choice.fraction > 0 ? "正解！" : "不正解…";
-        const feedbacks = session.choices
-          .map(c => `${c.answer}: ${c.feedback}`)
-          .join("\n");
-
-        await replyLine(event.replyToken, [
-          { type: "text", text: `${correct}\n\n解説:\n${feedbacks}` }
-        ]);
-
-        // セッションをクリア
-        delete userSession[userId];
       }
     }
-  }
 
-  res.sendStatus(200);
+    res.status(200).send("OK");
+  } catch (error) {
+    console.error("Webhook Error:", error);
+    res.status(500).send("Error");
+  }
 });
 
-// ===========================
-// LINE返信関数
-// ===========================
-async function replyLine(replyToken, messages) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/reply",
-    { replyToken, messages },
-    { headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` } }
-  );
+// Moodleからランダム問題を取得
+async function getRandomQuestionFromMoodle() {
+  const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${MOODLE_TOKEN}&wsfunction=mod_quiz_get_quizzes_by_courses&moodlewsrestformat=json`;
+  const res = await axios.get(url);
+  const quizzes = res.data.quizzes;
+
+  if (!quizzes || quizzes.length === 0) {
+    return { questiontext: "問題が見つかりませんでした。" };
+  }
+
+  // とりあえず最初のクイズの問題を取得（API制限のため簡略）
+  const quiz = quizzes[0];
+
+  const quizUrl = `${MOODLE_URL}/mod/quiz/view.php?id=${quiz.id}`;
+  const html = (await axios.get(quizUrl)).data;
+  const $ = cheerio.load(html);
+
+  // Moodleの問題本文を抽出
+  const question = $("div.qtext").first().html() || "問題が見つかりません。";
+
+  return { questiontext: question, answer: "海（例）" }; // テスト用
 }
 
+// HTMLをLINE表示用テキストに変換
+function formatQuestionText(question) {
+  const $ = cheerio.load(question.questiontext);
+  $("img").each((i, el) => {
+    const src = $(el).attr("src");
+    if (src && !src.startsWith("http")) {
+      $(el).attr("src", `${MOODLE_URL}/${src}`);
+    }
+  });
+
+  // HTMLタグを除去し、LINEで文字化けしないようデコード
+  const text = $.text().replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+
+  return `問題：${text}`;
+}
+
+// 回答チェック（仮）
+function checkAnswer(question, userAnswer) {
+  return userAnswer.includes(question.answer);
+}
+
+// LINE返信関数
+async function replyMessage(replyToken, text) {
+  const url = "https://api.line.me/v2/bot/message/reply";
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+  };
+
+  const body = {
+    replyToken,
+    messages: [{ type: "text", text }],
+  };
+
+  await axios.post(url, body, { headers });
+}
+
+// サーバー起動
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
