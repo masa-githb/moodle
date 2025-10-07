@@ -1,15 +1,21 @@
 {
   "name": "line-moodle-bot",
   "version": "1.0.0",
+  "description": "LINE Bot that connects to Moodle and provides quiz questions.",
   "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.7.2",
+    "axios": "^1.7.4",
     "body-parser": "^1.20.2",
-    "cheerio": "^1.0.0",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1",
     "express": "^4.19.2"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
 }
