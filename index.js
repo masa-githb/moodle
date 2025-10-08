@@ -11,25 +11,24 @@ const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
-const MOODLE_URL = process.env.MOODLE_URL; // MoodleのトップURL (例: https://moodle-5f96.onrender.com)
-const TOKEN = process.env.MOODLE_TOKEN;    // MoodleのWebサービス用トークン
+const MOODLE_URL = process.env.MOODLE_URL; // 例: https://moodle-5f96.onrender.com
+const TOKEN = process.env.MOODLE_TOKEN;    // Moodle Webサービスのトークン
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // LINE Messaging APIトークン
 
 // ====== 画像URL抽出関数 ======
 function extractImageUrl(html) {
   try {
     const $ = cheerio.load(html);
-    // Moodleの画像は /pluginfile.php や /draftfile.php の場合が多い
     const img = $("img").first();
-    if (img.length) {
-      let src = img.attr("src");
-      if (!src) return null;
-      if (src.startsWith("/")) {
-        // Moodleの相対パス対応
-        return `${MOODLE_URL}${src}`;
-      }
-      return src;
+    if (!img.length) return null;
+
+    let src = img.attr("src");
+    if (!src) return null;
+
+    if (src.startsWith("/")) {
+      return `${MOODLE_URL}${src}`;
     }
-    return null;
+    return src;
   } catch (err) {
     console.error("extractImageUrl error:", err);
     return null;
@@ -43,11 +42,8 @@ async function fetchMoodleQuizzes() {
     const response = await axios.get(url);
     const courses = response.data;
 
-    if (!Array.isArray(courses)) {
-      throw new Error("Moodleからのデータが不正です");
-    }
+    if (!Array.isArray(courses)) throw new Error("Moodleデータが不正です");
 
-    // すべてのコースからクイズ情報を取得
     const quizzes = [];
     for (const course of courses) {
       const modUrl = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=core_course_get_contents&moodlewsrestformat=json&courseid=${course.id}`;
@@ -65,7 +61,6 @@ async function fetchMoodleQuizzes() {
         }
       }
     }
-
     return quizzes;
   } catch (err) {
     console.error("fetchMoodleQuizzes error:", err);
@@ -73,52 +68,75 @@ async function fetchMoodleQuizzes() {
   }
 }
 
-// ====== LINE Botのメインエンドポイント ======
+// ====== LINEへ返信 ======
+async function replyMessage(replyToken, messages) {
+  try {
+    await axios.post(
+      "https://api.line.me/v2/bot/message/reply",
+      {
+        replyToken,
+        messages,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${LINE_TOKEN}`,
+        },
+      }
+    );
+  } catch (err) {
+    console.error("LINE reply error:", err.response?.data || err.message);
+  }
+}
+
+// ====== Webhook受信 ======
 app.post("/webhook", async (req, res) => {
   try {
     console.log("LINE Webhook received:", JSON.stringify(req.body, null, 2));
 
     const event = req.body.events?.[0];
-    if (!event || !event.message?.text) {
-      return res.sendStatus(200);
-    }
+    if (!event || !event.message?.text) return res.sendStatus(200);
 
-    const userMessage = event.message.text.toLowerCase();
-    if (userMessage.includes("quiz")) {
+    const text = event.message.text.toLowerCase();
+
+    // 「問題」「quiz」などでMoodleから取得
+    if (text.includes("quiz") || text.includes("問題")) {
       const quizzes = await fetchMoodleQuizzes();
-
       if (quizzes.length === 0) {
-        return res.json({
-          replyToken: event.replyToken,
-          messages: [{ type: "text", text: "クイズが見つかりませんでした。" }],
+        await replyMessage(event.replyToken, [
+          { type: "text", text: "クイズが見つかりませんでした。" },
+        ]);
+        return res.sendStatus(200);
+      }
+
+      const quiz = quizzes[0];
+      const page = await axios.get(quiz.quizUrl);
+      const imgUrl = extractImageUrl(page.data);
+
+      const messages = [
+        {
+          type: "text",
+          text: `コース: ${quiz.course}\nクイズ: ${quiz.quizName}\nURL: ${quiz.quizUrl}`,
+        },
+      ];
+
+      if (imgUrl) {
+        messages.push({
+          type: "image",
+          originalContentUrl: imgUrl,
+          previewImageUrl: imgUrl,
         });
       }
 
-      // 最初のクイズを取得
-      const firstQuiz = quizzes[0];
-
-      // クイズページをHTMLとして取得
-      const page = await axios.get(firstQuiz.quizUrl);
-      const imgUrl = extractImageUrl(page.data);
-
-      const messageText = `コース名: ${firstQuiz.course}\nクイズ: ${firstQuiz.quizName}\nURL: ${firstQuiz.quizUrl}`;
-      const messages = [{ type: "text", text: messageText }];
-
-      if (imgUrl) {
-        messages.push({ type: "image", originalContentUrl: imgUrl, previewImageUrl: imgUrl });
-      }
-
-      return res.json({
-        replyToken: event.replyToken,
-        messages,
-      });
+      await replyMessage(event.replyToken, messages);
+      return res.sendStatus(200);
     }
 
     // デフォルト返信
-    res.json({
-      replyToken: event.replyToken,
-      messages: [{ type: "text", text: "「quiz」と送信するとMoodleのクイズを取得します。" }],
-    });
+    await replyMessage(event.replyToken, [
+      { type: "text", text: "「問題」または「quiz」と送るとMoodleのクイズを表示します。" },
+    ]);
+    res.sendStatus(200);
   } catch (err) {
     console.error("Webhook error:", err);
     res.sendStatus(500);
