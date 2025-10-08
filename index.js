@@ -1,4 +1,4 @@
-// index.js (修正版)
+// index.js (改良版)
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
@@ -23,7 +23,6 @@ const userSessions = new Map();
  */
 function extractAndNormalizeImageUrl(rawHtml, data = {}) {
   if (!rawHtml) return null;
-
   const decoded = he.decode(rawHtml);
   const $ = cheerio.load(decoded);
   const img = $("img").first();
@@ -31,23 +30,26 @@ function extractAndNormalizeImageUrl(rawHtml, data = {}) {
 
   let src = img.attr("src").trim();
 
-  // 完全URLならそのまま
+  // 1. 絶対URL → そのまま
   if (/^https?:\/\//i.test(src)) return src;
 
-  // @@PLUGINFILE@@ の場合
+  // 2. @@PLUGINFILE@@ パターン
   if (src.startsWith("@@PLUGINFILE@@")) {
     const filename = src.replace(/^@@PLUGINFILE@@\//, "");
     const contextid = data.contextid || 1;
-    return `${MOODLE_URL}/webservice/pluginfile.php/${contextid}/question/questiontext/${data.id}/${encodeURIComponent(filename)}?token=${MOODLE_TOKEN}`;
+    const id = data.id || 0;
+    return `${MOODLE_URL}/webservice/pluginfile.php/${contextid}/question/questiontext/${id}/${encodeURIComponent(
+      filename
+    )}?token=${MOODLE_TOKEN}`;
   }
 
-  // /pluginfile.php または /webservice/pluginfile.php
+  // 3. /pluginfile.php または /webservice/pluginfile.php
   if (src.startsWith("/pluginfile.php") || src.startsWith("/webservice/pluginfile.php")) {
     const sep = src.includes("?") ? "&" : "?";
     return `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
   }
 
-  // その他の相対パス
+  // 4. その他の相対パス
   if (src.startsWith("/")) {
     const sep = src.includes("?") ? "&" : "?";
     return `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
@@ -57,7 +59,7 @@ function extractAndNormalizeImageUrl(rawHtml, data = {}) {
 }
 
 /**
- * LINEに返信
+ * LINEに返信（安全処理付き）
  */
 async function replyLine(replyToken, messages) {
   try {
@@ -67,6 +69,13 @@ async function replyLine(replyToken, messages) {
         ? messages
         : [{ type: "text", text: messages.text || String(messages) }],
     };
+
+    // 空文字対策
+    payload.messages = payload.messages.map((m) => ({
+      type: m.type || "text",
+      text: m.text?.trim() || "（空のメッセージ）",
+      ...(m.type === "image" ? m : {}),
+    }));
 
     await axios.post("https://api.line.me/v2/bot/message/reply", payload, {
       headers: {
@@ -117,23 +126,30 @@ app.post("/webhook", async (req, res) => {
       // 画像URL抽出
       const imageUrl = extractAndNormalizeImageUrl(q.questiontext, q);
 
-      // テキスト整形
+      // 問題文テキスト整形
       const plain = he
         .decode(q.questiontext)
         .replace(/<[^>]+>/g, "")
         .replace(/\s+/g, " ")
         .trim();
 
-      const choices = q.choices || [];
+      // 選択肢整形
+      const choices = (q.choices || []).map((c) => ({
+        ...c,
+        answer: he.decode(c.answer || "").replace(/<[^>]+>/g, "").trim(),
+      }));
+
       const choicesText =
         choices.length > 0
           ? choices.map((c, i) => `${i + 1}. ${c.answer}`).join("\n")
           : "選択肢がありません。";
 
-      // セッション保存
+      // ユーザーごとのセッションに保存
       userSessions.set(userId, q);
 
       const messages = [];
+
+      // 画像付き
       if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
         messages.push({
           type: "image",
@@ -167,7 +183,7 @@ app.post("/webhook", async (req, res) => {
       }
 
       const correct = Number(choice.fraction) > 0;
-      const feedback = choice.feedback || "";
+      const feedback = he.decode(choice.feedback || "").replace(/<[^>]+>/g, "").trim();
       const result = correct ? "⭕ 正解！" : "❌ 不正解。";
       const feedbackText = feedback ? `\n\n解説: ${feedback}` : "";
 
@@ -176,7 +192,7 @@ app.post("/webhook", async (req, res) => {
       continue;
     }
 
-    // === その他のメッセージ ===
+    // === その他 ===
     await replyLine(event.replyToken, {
       text: '「問題ちょうだい」と送ると問題を出します。回答は「1」「2」などの番号で送ってください。',
     });
@@ -188,4 +204,4 @@ app.post("/webhook", async (req, res) => {
  */
 app.get("/", (req, res) => res.send("RENDER ACTIVE: OK"));
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Server running on PORT ${PORT}`));
