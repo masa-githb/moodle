@@ -15,7 +15,10 @@ const MOODLE_URL = process.env.MOODLE_URL;
 const TOKEN = process.env.MOODLE_TOKEN;
 const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-// ====== 画像URL抽出関数 ======
+// --- ユーザーごとに最後に出した問題を保持する ---
+const userSessions = new Map();
+
+// ====== HTML内の画像URLを抽出 ======
 function extractImageUrl(html) {
   try {
     const $ = cheerio.load(html);
@@ -77,10 +80,11 @@ app.post("/webhook", async (req, res) => {
     const event = req.body.events?.[0];
     if (!event || !event.message?.text) return res.sendStatus(200);
 
-    const text = event.message.text.toLowerCase();
+    const userId = event.source.userId;
+    const text = event.message.text.trim();
 
-    // === 「問題」または「quiz」で出題 ===
-    if (text.includes("問題") || text.includes("quiz")) {
+    // === 「問題」で出題 ===
+    if (text.includes("問題")) {
       const question = await fetchRandomQuestion();
       if (!question || !question.questiontext) {
         await replyMessage(event.replyToken, [
@@ -90,19 +94,21 @@ app.post("/webhook", async (req, res) => {
       }
 
       const imgUrl = extractImageUrl(question.questiontext);
+      const cleanQuestion = question.questiontext.replace(/<[^>]+>/g, "");
       const choiceText = question.choices
         .map((c, i) => `${i + 1}. ${c.answer}`)
         .join("\n");
 
+      // ユーザーに出題を記録
+      userSessions.set(userId, question);
+      console.log(`Stored question for ${userId}: ${question.id}`);
+
       const messages = [
-        {
-          type: "text",
-          text: `${question.questiontext.replace(/<[^>]+>/g, "")}\n\n${choiceText}`,
-        },
+        { type: "text", text: `【問題】\n${cleanQuestion}\n\n${choiceText}` },
       ];
 
       if (imgUrl) {
-        messages.push({
+        messages.unshift({
           type: "image",
           originalContentUrl: imgUrl,
           previewImageUrl: imgUrl,
@@ -113,17 +119,45 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // === 回答メッセージ ===
+    // === 回答チェック（1〜4など数字） ===
     if (/^\d+$/.test(text)) {
+      const session = userSessions.get(userId);
+      if (!session) {
+        await replyMessage(event.replyToken, [
+          { type: "text", text: "先に「問題」と送ってください。" },
+        ]);
+        return res.sendStatus(200);
+      }
+
+      const choiceIndex = parseInt(text) - 1;
+      const choice = session.choices[choiceIndex];
+
+      if (!choice) {
+        await replyMessage(event.replyToken, [
+          { type: "text", text: "その番号の選択肢はありません。" },
+        ]);
+        return res.sendStatus(200);
+      }
+
+      const isCorrect = choice.fraction === 1;
+      const feedback = choice.feedback || "";
+
+      const replyText = isCorrect
+        ? `⭕ 正解！ ${feedback}`
+        : `❌ 不正解。${feedback}`;
+
       await replyMessage(event.replyToken, [
-        { type: "text", text: "回答を受け取りました。採点機能は開発中です。" },
+        { type: "text", text: replyText },
       ]);
+
+      // 回答後、セッション削除
+      userSessions.delete(userId);
       return res.sendStatus(200);
     }
 
-    // === デフォルト返信 ===
+    // === その他 ===
     await replyMessage(event.replyToken, [
-      { type: "text", text: "「問題」と送るとMoodleからランダムで問題を出します。" },
+      { type: "text", text: "「問題」と送るとMoodleからランダムに問題を出します。" },
     ]);
 
     res.sendStatus(200);
@@ -133,12 +167,12 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ====== 動作確認用 ======
+// ====== Render動作確認用 ======
 app.get("/", (req, res) => {
-  res.send("✅ LINE Moodle Bot is running.");
+  res.send("✅ LINE Moodle Bot is running and ready!");
 });
 
-// ====== サーバー起動 ======
+// ====== 起動 ======
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
