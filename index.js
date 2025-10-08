@@ -11,9 +11,9 @@ const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
-const MOODLE_URL = process.env.MOODLE_URL; // 例: https://moodle-5f96.onrender.com
-const TOKEN = process.env.MOODLE_TOKEN;    // Moodle Webサービスのトークン
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // LINE Messaging APIトークン
+const MOODLE_URL = process.env.MOODLE_URL;
+const TOKEN = process.env.MOODLE_TOKEN;
+const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
 // ====== 画像URL抽出関数 ======
 function extractImageUrl(html) {
@@ -35,36 +35,19 @@ function extractImageUrl(html) {
   }
 }
 
-// ====== Moodleからクイズを取得 ======
-async function fetchMoodleQuizzes() {
+// ====== Moodleからランダム問題を取得 ======
+async function fetchRandomQuestion() {
   try {
-    const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=core_course_get_courses&moodlewsrestformat=json`;
+    const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
+    console.log("Moodle API URL:", url);
+
     const response = await axios.get(url);
-    const courses = response.data;
+    console.log("Moodle response:", response.data);
 
-    if (!Array.isArray(courses)) throw new Error("Moodleデータが不正です");
-
-    const quizzes = [];
-    for (const course of courses) {
-      const modUrl = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=core_course_get_contents&moodlewsrestformat=json&courseid=${course.id}`;
-      const modRes = await axios.get(modUrl);
-
-      for (const section of modRes.data) {
-        for (const mod of section.modules || []) {
-          if (mod.modname === "quiz") {
-            quizzes.push({
-              course: course.fullname,
-              quizName: mod.name,
-              quizUrl: mod.url,
-            });
-          }
-        }
-      }
-    }
-    return quizzes;
+    return response.data;
   } catch (err) {
-    console.error("fetchMoodleQuizzes error:", err);
-    return [];
+    console.error("fetchRandomQuestion error:", err.response?.data || err.message);
+    return null;
   }
 }
 
@@ -73,10 +56,7 @@ async function replyMessage(replyToken, messages) {
   try {
     await axios.post(
       "https://api.line.me/v2/bot/message/reply",
-      {
-        replyToken,
-        messages,
-      },
+      { replyToken, messages },
       {
         headers: {
           "Content-Type": "application/json",
@@ -99,24 +79,25 @@ app.post("/webhook", async (req, res) => {
 
     const text = event.message.text.toLowerCase();
 
-    // 「問題」「quiz」などでMoodleから取得
-    if (text.includes("quiz") || text.includes("問題")) {
-      const quizzes = await fetchMoodleQuizzes();
-      if (quizzes.length === 0) {
+    // === 「問題」または「quiz」で出題 ===
+    if (text.includes("問題") || text.includes("quiz")) {
+      const question = await fetchRandomQuestion();
+      if (!question || !question.questiontext) {
         await replyMessage(event.replyToken, [
-          { type: "text", text: "クイズが見つかりませんでした。" },
+          { type: "text", text: "問題が見つかりませんでした。" },
         ]);
         return res.sendStatus(200);
       }
 
-      const quiz = quizzes[0];
-      const page = await axios.get(quiz.quizUrl);
-      const imgUrl = extractImageUrl(page.data);
+      const imgUrl = extractImageUrl(question.questiontext);
+      const choiceText = question.choices
+        .map((c, i) => `${i + 1}. ${c.answer}`)
+        .join("\n");
 
       const messages = [
         {
           type: "text",
-          text: `コース: ${quiz.course}\nクイズ: ${quiz.quizName}\nURL: ${quiz.quizUrl}`,
+          text: `${question.questiontext.replace(/<[^>]+>/g, "")}\n\n${choiceText}`,
         },
       ];
 
@@ -132,10 +113,19 @@ app.post("/webhook", async (req, res) => {
       return res.sendStatus(200);
     }
 
-    // デフォルト返信
+    // === 回答メッセージ ===
+    if (/^\d+$/.test(text)) {
+      await replyMessage(event.replyToken, [
+        { type: "text", text: "回答を受け取りました。採点機能は開発中です。" },
+      ]);
+      return res.sendStatus(200);
+    }
+
+    // === デフォルト返信 ===
     await replyMessage(event.replyToken, [
-      { type: "text", text: "「問題」または「quiz」と送るとMoodleのクイズを表示します。" },
+      { type: "text", text: "「問題」と送るとMoodleからランダムで問題を出します。" },
     ]);
+
     res.sendStatus(200);
   } catch (err) {
     console.error("Webhook error:", err);
