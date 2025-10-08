@@ -1,159 +1,136 @@
+// index.js
 import express from "express";
+import bodyParser from "body-parser";
 import axios from "axios";
 import * as cheerio from "cheerio";
 import dotenv from "dotenv";
-import bodyParser from "body-parser";
-import he from "he";
 
 dotenv.config();
 
 const app = express();
 app.use(bodyParser.json());
 
-const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-const MOODLE_URL = process.env.MOODLE_URL;
-const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
+const PORT = process.env.PORT || 3000;
+const MOODLE_URL = process.env.MOODLE_URL; // MoodleのトップURL (例: https://moodle-5f96.onrender.com)
+const TOKEN = process.env.MOODLE_TOKEN;    // MoodleのWebサービス用トークン
 
-// ユーザーごとの問題セッションを保持
-const userSession = {};
+// ====== 画像URL抽出関数 ======
+function extractImageUrl(html) {
+  try {
+    const $ = cheerio.load(html);
+    // Moodleの画像は /pluginfile.php や /draftfile.php の場合が多い
+    const img = $("img").first();
+    if (img.length) {
+      let src = img.attr("src");
+      if (!src) return null;
+      if (src.startsWith("/")) {
+        // Moodleの相対パス対応
+        return `${MOODLE_URL}${src}`;
+      }
+      return src;
+    }
+    return null;
+  } catch (err) {
+    console.error("extractImageUrl error:", err);
+    return null;
+  }
+}
 
-// ★ Render スリープ解除確認用
-app.get("/", (req, res) => {
-  res.send("RENDER ACTIVE: OK");
-});
+// ====== Moodleからクイズを取得 ======
+async function fetchMoodleQuizzes() {
+  try {
+    const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=core_course_get_courses&moodlewsrestformat=json`;
+    const response = await axios.get(url);
+    const courses = response.data;
 
-// デバッグ用ミドルウェア
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
-});
+    if (!Array.isArray(courses)) {
+      throw new Error("Moodleからのデータが不正です");
+    }
 
-// LINE webhook
-app.post("/webhook", async (req, res) => {
-  console.log("Webhook received:", JSON.stringify(req.body, null, 2));
-  const events = req.body.events;
+    // すべてのコースからクイズ情報を取得
+    const quizzes = [];
+    for (const course of courses) {
+      const modUrl = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${TOKEN}&wsfunction=core_course_get_contents&moodlewsrestformat=json&courseid=${course.id}`;
+      const modRes = await axios.get(modUrl);
 
-  for (let event of events) {
-    if (event.type === "message" && event.message.type === "text") {
-      const userId = event.source.userId;
-      const text = event.message.text.trim();
-
-      // --- 問題を要求 ---
-      if (text === "問題ちょうだい") {
-        try {
-          const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
-          console.log("Moodle API URL:", url);
-          const response = await axios.get(url);
-          const data = response.data;
-          console.log("Moodle response:", JSON.stringify(data, null, 2));
-
-          if (!data || !data.choices || data.choices.length === 0) {
-            await replyLine(event.replyToken, "問題が見つかりませんでした。");
-            continue;
-          }
-
-          // 問題文と画像を処理
-          let questionText = he.decode(stripHtml(data.questiontext));
-          let imageUrl = extractImageUrl(data.questiontext);
-          if (!imageUrl) {
-            console.log("No valid image found in:", data.questiontext);
-          }
-
-          // 選択肢
-          let message = `問題: ${questionText}\n`;
-          data.choices.forEach((c, i) => {
-            message += `${i + 1}. ${c.answer}\n`;
-          });
-
-          // セッションに保存
-          userSession[userId] = data;
-
-          // LINE返信メッセージ生成
-          const messages = [];
-          if (imageUrl) {
-            messages.push({
-              type: "image",
-              originalContentUrl: imageUrl,
-              previewImageUrl: imageUrl,
+      for (const section of modRes.data) {
+        for (const mod of section.modules || []) {
+          if (mod.modname === "quiz") {
+            quizzes.push({
+              course: course.fullname,
+              quizName: mod.name,
+              quizUrl: mod.url,
             });
           }
-          messages.push({ type: "text", text: message });
-
-          await replyLine(event.replyToken, messages);
-        } catch (err) {
-          console.error(err);
-          await replyLine(event.replyToken, "APIエラーが発生しました。");
         }
-      }
-
-      // --- 回答を送信した場合（数字） ---
-      else if (/^[1-9]\d*$/.test(text)) {
-        const session = userSession[userId];
-        if (!session) {
-          await replyLine(event.replyToken, "先に「問題ちょうだい」と送ってください。");
-          continue;
-        }
-
-        const choiceIndex = parseInt(text, 10) - 1;
-        if (choiceIndex < 0 || choiceIndex >= session.choices.length) {
-          await replyLine(event.replyToken, "番号が不正です。");
-          continue;
-        }
-
-        const choice = session.choices[choiceIndex];
-        const correct = choice.fraction > 0 ? "正解！" : "不正解…";
-
-        let feedbacks = session.choices
-          .map(c => `${c.answer}: ${c.feedback || ""}`)
-          .join("\n");
-
-        await replyLine(event.replyToken, `${correct}\n\n解説:\n${feedbacks}`);
-
-        delete userSession[userId]; // セッション削除
       }
     }
-  }
 
-  res.sendStatus(200);
+    return quizzes;
+  } catch (err) {
+    console.error("fetchMoodleQuizzes error:", err);
+    return [];
+  }
+}
+
+// ====== LINE Botのメインエンドポイント ======
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("LINE Webhook received:", JSON.stringify(req.body, null, 2));
+
+    const event = req.body.events?.[0];
+    if (!event || !event.message?.text) {
+      return res.sendStatus(200);
+    }
+
+    const userMessage = event.message.text.toLowerCase();
+    if (userMessage.includes("quiz")) {
+      const quizzes = await fetchMoodleQuizzes();
+
+      if (quizzes.length === 0) {
+        return res.json({
+          replyToken: event.replyToken,
+          messages: [{ type: "text", text: "クイズが見つかりませんでした。" }],
+        });
+      }
+
+      // 最初のクイズを取得
+      const firstQuiz = quizzes[0];
+
+      // クイズページをHTMLとして取得
+      const page = await axios.get(firstQuiz.quizUrl);
+      const imgUrl = extractImageUrl(page.data);
+
+      const messageText = `コース名: ${firstQuiz.course}\nクイズ: ${firstQuiz.quizName}\nURL: ${firstQuiz.quizUrl}`;
+      const messages = [{ type: "text", text: messageText }];
+
+      if (imgUrl) {
+        messages.push({ type: "image", originalContentUrl: imgUrl, previewImageUrl: imgUrl });
+      }
+
+      return res.json({
+        replyToken: event.replyToken,
+        messages,
+      });
+    }
+
+    // デフォルト返信
+    res.json({
+      replyToken: event.replyToken,
+      messages: [{ type: "text", text: "「quiz」と送信するとMoodleのクイズを取得します。" }],
+    });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.sendStatus(500);
+  }
 });
 
-// HTMLタグ除去
-function stripHtml(html) {
-  const $ = cheerio.load(html);
-  return $.text().trim();
-}
+// ====== 動作確認用 ======
+app.get("/", (req, res) => {
+  res.send("✅ LINE Moodle Bot is running.");
+});
 
-// 画像URL抽出（Googleリダイレクトも対応）
-function extractImageUrl(html) {
-  const $ = cheerio.load(html);
-  const imgTag = $("img").attr("src");
-  if (!imgTag) return null;
-
-  let decoded = he.decode(imgTag);
-  if (decoded.includes("https://www.google.com/url")) {
-    const urlMatch = decoded.match(/url\?q=([^&]+)/);
-    if (urlMatch && urlMatch[1]) {
-      return decodeURIComponent(urlMatch[1]);
-    }
-  }
-  return decoded;
-}
-
-// LINE返信関数
-async function replyLine(replyToken, messages) {
-  await axios.post(
-    "https://api.line.me/v2/bot/message/reply",
-    {
-      replyToken,
-      messages: Array.isArray(messages) ? messages : [{ type: "text", text: messages }],
-    },
-    {
-      headers: { Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}` },
-    }
-  );
-}
-
-const PORT = process.env.PORT || 3000;
+// ====== サーバー起動 ======
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
