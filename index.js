@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { Client } from "@line/bot-sdk";
 import he from "he";
 import cheerio from "cheerio";
+import * as cheerio from "cheerio";  // ← ★ 修正ポイント
 
 dotenv.config();
 
