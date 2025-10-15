@@ -1,4 +1,4 @@
-// index.js (改良版)
+// index.js (ログ強化版)
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
@@ -22,40 +22,43 @@ const userSessions = new Map();
  * HTML文字列から画像URLを抽出してMoodle用に正規化する
  */
 function extractAndNormalizeImageUrl(rawHtml, data = {}) {
-  if (!rawHtml) return null;
+  if (!rawHtml) {
+    console.log("🔸 extractImageUrl: rawHtml is empty");
+    return null;
+  }
+
   const decoded = he.decode(rawHtml);
   const $ = cheerio.load(decoded);
   const img = $("img").first();
-  if (!img || !img.attr("src")) return null;
+  if (!img || !img.attr("src")) {
+    console.log("🔸 extractImageUrl: no <img> tag found");
+    return null;
+  }
 
   let src = img.attr("src").trim();
+  console.log(`🔍 extractImageUrl: raw src = ${src}`);
 
-  // 1. 絶対URL → そのまま
-  if (/^https?:\/\//i.test(src)) return src;
+  let finalUrl = null;
 
-  // 2. @@PLUGINFILE@@ パターン
-  if (src.startsWith("@@PLUGINFILE@@")) {
+  if (/^https?:\/\//i.test(src)) {
+    finalUrl = src;
+  } else if (src.startsWith("@@PLUGINFILE@@")) {
     const filename = src.replace(/^@@PLUGINFILE@@\//, "");
     const contextid = data.contextid || 1;
     const id = data.id || 0;
-    return `${MOODLE_URL}/webservice/pluginfile.php/${contextid}/question/questiontext/${id}/${encodeURIComponent(
+    finalUrl = `${MOODLE_URL}/webservice/pluginfile.php/${contextid}/question/questiontext/${id}/${encodeURIComponent(
       filename
     )}?token=${MOODLE_TOKEN}`;
-  }
-
-  // 3. /pluginfile.php または /webservice/pluginfile.php
-  if (src.startsWith("/pluginfile.php") || src.startsWith("/webservice/pluginfile.php")) {
+  } else if (src.startsWith("/pluginfile.php") || src.startsWith("/webservice/pluginfile.php")) {
     const sep = src.includes("?") ? "&" : "?";
-    return `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
-  }
-
-  // 4. その他の相対パス
-  if (src.startsWith("/")) {
+    finalUrl = `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
+  } else if (src.startsWith("/")) {
     const sep = src.includes("?") ? "&" : "?";
-    return `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
+    finalUrl = `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
   }
 
-  return null;
+  console.log(`✅ extractImageUrl: normalized = ${finalUrl || "null"}`);
+  return finalUrl;
 }
 
 /**
@@ -77,6 +80,8 @@ async function replyLine(replyToken, messages) {
       ...(m.type === "image" ? m : {}),
     }));
 
+    console.log("📤 Sending to LINE:", JSON.stringify(payload, null, 2));
+
     await axios.post("https://api.line.me/v2/bot/message/reply", payload, {
       headers: {
         Authorization: `Bearer ${LINE_TOKEN}`,
@@ -84,7 +89,7 @@ async function replyLine(replyToken, messages) {
       },
     });
   } catch (err) {
-    console.error("LINE reply error:", err.response?.data || err.message);
+    console.error("❌ LINE reply error:", err.response?.data || err.message);
   }
 }
 
@@ -95,9 +100,10 @@ async function fetchRandomQuestionFromMoodle() {
   const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
   try {
     const r = await axios.get(url, { timeout: 8000 });
+    console.log("📥 Moodle question fetched:", JSON.stringify(r.data, null, 2).slice(0, 500) + "...");
     return r.data;
   } catch (err) {
-    console.error("fetchRandomQuestionFromMoodle error:", err.response?.data || err.message);
+    console.error("❌ fetchRandomQuestionFromMoodle error:", err.response?.data || err.message);
     return null;
   }
 }
@@ -114,6 +120,8 @@ app.post("/webhook", async (req, res) => {
 
     const userId = event.source.userId;
     const text = event.message.text.trim();
+
+    console.log(`💬 Received from ${userId}: ${text}`);
 
     // === 「問題ちょうだい」 ===
     if (text === "問題" || text === "問題ちょうだい") {
@@ -151,11 +159,14 @@ app.post("/webhook", async (req, res) => {
 
       // 画像付き
       if (imageUrl && /^https?:\/\//i.test(imageUrl)) {
+        console.log(`🖼️ Sending image: ${imageUrl}`);
         messages.push({
           type: "image",
           originalContentUrl: imageUrl,
           previewImageUrl: imageUrl,
         });
+      } else {
+        console.log("⚠️ No valid image URL found.");
       }
 
       messages.push({
@@ -186,6 +197,8 @@ app.post("/webhook", async (req, res) => {
       const feedback = he.decode(choice.feedback || "").replace(/<[^>]+>/g, "").trim();
       const result = correct ? "⭕ 正解！" : "❌ 不正解。";
       const feedbackText = feedback ? `\n\n解説: ${feedback}` : "";
+
+      console.log(`🧩 Answer: ${text}, Correct = ${correct}`);
 
       await replyLine(event.replyToken, { text: `${result}${feedbackText}` });
       userSessions.delete(userId);
