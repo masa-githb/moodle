@@ -1,252 +1,184 @@
-// index.js（LINE × Moodle × Proxy対応 完全版）
-
 import express from "express";
-import bodyParser from "body-parser";
 import axios from "axios";
-import * as cheerio from "cheerio";
-import he from "he";
+import line from "@line/bot-sdk";
 import dotenv from "dotenv";
-
+import cors from "cors";
 dotenv.config();
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
+app.use(cors());
 
-const PORT = process.env.PORT || 3000;
-const BASE_URL = process.env.BASE_URL?.replace(/\/$/, ""); // ← RenderのURL（例: https://xxxx.onrender.com）
-const MOODLE_URL = process.env.MOODLE_URL.replace(/\/$/, "");
+// ✅ LINE設定
+const lineConfig = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
+};
+const client = new line.Client(lineConfig);
+
+// ✅ サーバーのベースURL（.envに設定してください）
+const SERVER_BASE_URL = process.env.SERVER_BASE_URL; // 例: https://ik1-449-56991.vs.sakura.ne.jp
+
+// ✅ Moodle設定
+const MOODLE_URL = process.env.MOODLE_URL;
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN;
 
-const userSessions = new Map();
+// ✅ 質問キャッシュ（ユーザーごと）
+const userQuestions = new Map();
 
-/* =============================
- * HTMLから画像URLを抽出して正規化
- * ============================= */
-function extractAndNormalizeImageUrl(rawHtml, data = {}) {
-  if (!rawHtml) return null;
-  const decoded = he.decode(rawHtml);
-  const $ = cheerio.load(decoded);
-  const img = $("img").first();
-  if (!img || !img.attr("src")) return null;
-
-  let src = img.attr("src").trim();
-  console.log("🔍 extractImageUrl: raw src =", src);
-
-  // 絶対URL
-  if (/^https?:\/\//i.test(src)) return src;
-
-  // @@PLUGINFILE@@ パターン
-  if (src.startsWith("@@PLUGINFILE@@")) {
-    const filename = src.replace(/^@@PLUGINFILE@@\//, "");
-    const contextid = data.contextid || 1;
-    const id = data.id || 0;
-    const normalized = `${MOODLE_URL}/webservice/pluginfile.php/${contextid}/question/questiontext/${id}/${encodeURIComponent(
-      filename
-    )}?token=${MOODLE_TOKEN}`;
-    console.log("✅ extractImageUrl: normalized =", normalized);
-    return normalized;
-  }
-
-  // /pluginfile.php or /webservice/pluginfile.php
-  if (src.startsWith("/pluginfile.php") || src.startsWith("/webservice/pluginfile.php")) {
-    const sep = src.includes("?") ? "&" : "?";
-    const normalized = `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
-    console.log("✅ extractImageUrl: normalized =", normalized);
-    return normalized;
-  }
-
-  // 相対パス
-  if (src.startsWith("/")) {
-    const sep = src.includes("?") ? "&" : "?";
-    const normalized = `${MOODLE_URL}${src}${sep}token=${MOODLE_TOKEN}`;
-    console.log("✅ extractImageUrl: normalized =", normalized);
-    return normalized;
-  }
-
-  return null;
-}
-
-/* =============================
- * LINEへ返信
- * ============================= */
-async function replyLine(replyToken, messages) {
-  try {
-    const payload = {
-      replyToken,
-      messages: Array.isArray(messages)
-        ? messages
-        : [{ type: "text", text: messages.text || String(messages) }],
-    };
-
-    // 空メッセージ防止処理
-    payload.messages = payload.messages.map((m) => {
-      if (m.type === "image") {
-        return {
-          type: "image",
-          originalContentUrl: m.originalContentUrl,
-          previewImageUrl: m.previewImageUrl,
-        };
-      }
-      return {
-        type: "text",
-        text: m.text?.trim() || "（空のメッセージ）",
-      };
-    });
-
-    console.log("📤 Sending to LINE:", JSON.stringify(payload, null, 2));
-
-    await axios.post("https://api.line.me/v2/bot/message/reply", payload, {
-      headers: {
-        Authorization: `Bearer ${LINE_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    });
-  } catch (err) {
-    console.error("❌ LINE reply error:", err.response?.data || err.message);
-  }
-}
-
-/* =============================
- * Moodleからランダム問題を取得
- * ============================= */
-async function fetchRandomQuestionFromMoodle() {
-  const url = `${MOODLE_URL}/webservice/rest/server.php?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
-  console.log("🌐 Moodle API URL:", url);
-
-  try {
-    const r = await axios.get(url, { timeout: 10000 });
-    console.log("📥 Moodle question fetched:", JSON.stringify(r.data, null, 2));
-    return r.data;
-  } catch (err) {
-    console.error("❌ fetchRandomQuestionFromMoodle error:", err.response?.data || err.message);
-    return null;
-  }
-}
-
-/* =============================
- * LINE Webhook処理
- * ============================= */
+// ✅ LINE Webhook
 app.post("/webhook", async (req, res) => {
-  const events = req.body.events || [];
-  res.sendStatus(200);
+  try {
+    const events = req.body.events;
+    await Promise.all(events.map(handleEvent));
+    res.status(200).end();
+  } catch (err) {
+    console.error("Webhook Error:", err);
+    res.status(500).end();
+  }
+});
 
-  for (const event of events) {
-    if (event.type !== "message" || event.message?.type !== "text") continue;
+// ✅ イベント処理
+async function handleEvent(event) {
+  if (event.type !== "message" || event.message.type !== "text") return;
 
-    const userId = event.source.userId;
-    const text = event.message.text.trim();
-    console.log(`💬 Received from ${userId}: ${text}`);
+  const userMessage = event.message.text.trim();
+  const userId = event.source.userId;
 
-    // === 問題ちょうだい ===
-    if (text === "問題" || text === "問題ちょうだい") {
-      const q = await fetchRandomQuestionFromMoodle();
-      if (!q) {
-        await replyLine(event.replyToken, { text: "問題を取得できませんでした。" });
-        continue;
-      }
+  if (userMessage === "問題") {
+    await sendQuestion(event.replyToken, userId);
+  } else if (/^[1-4]$/.test(userMessage)) {
+    await checkAnswer(event.replyToken, userId, userMessage);
+  } else {
+    await client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "「問題」と入力するとクイズを出します！",
+    });
+  }
+}
 
-      // 画像URL抽出
-      const imageUrl = extractAndNormalizeImageUrl(q.questiontext, q);
+// ✅ 問題を送信
+async function sendQuestion(replyToken, userId) {
+  try {
+    const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
+    console.log("🌐 Moodle API URL:", url);
 
-      // 問題テキスト整形
-      const plain = he
-        .decode(q.questiontext)
-        .replace(/<[^>]+>/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
+    const response = await axios.get(url);
+    const q = response.data;
 
-      // 選択肢整形
-      const choices = (q.choices || []).map((c) => ({
-        ...c,
-        answer: he.decode(c.answer || "").replace(/<[^>]+>/g, "").trim(),
-      }));
+    console.log("📥 Moodle question fetched:", q);
 
-      const choicesText =
-        choices.length > 0
-          ? choices.map((c, i) => `${i + 1}. ${c.answer}`).join("\n")
-          : "選択肢がありません。";
+    // ✅ 画像URL抽出
+    const rawSrc = extractImageSrc(q.questiontext);
+    console.log("🔍 extractImageUrl: raw src =", rawSrc);
 
-      // セッションに保存
-      userSessions.set(userId, q);
-      console.log(`💾 Stored question for ${userId}: ${q.id}`);
+    const normalized = normalizeImageUrl(q.id, rawSrc);
+    console.log("✅ extractImageUrl: normalized =", normalized);
 
-      const messages = [];
+    // ✅ 問題文を整形
+    const questionText = q.questiontext.replace(/<[^>]*>/g, "").trim();
+    const choicesText = q.choices.map(
+      (c, i) => `${i + 1}. ${c.answer}`
+    ).join("\n");
 
-      if (imageUrl) {
-        // Render経由でプロキシ
-        const proxyUrl = `${BASE_URL}/proxy?url=${encodeURIComponent(imageUrl)}`;
-        console.log("🖼️ Sending image via proxy:", proxyUrl);
+    const messageText = `問題: ${questionText}\n\n${choicesText}\n\n数字で答えてください。`;
 
-        messages.push({
-          type: "image",
-          originalContentUrl: proxyUrl,
-          previewImageUrl: proxyUrl,
-        });
-      }
+    // ✅ ユーザーに紐づけて記憶
+    userQuestions.set(userId, q.id);
+    console.log(`💾 Stored question for ${userId}: ${q.id}`);
+
+    // ✅ LINEに送信（画像＋テキスト）
+    const messages = [];
+
+    if (normalized) {
+      const proxyUrl = `${SERVER_BASE_URL}/proxy?url=${encodeURIComponent(normalized)}`;
+      console.log("🖼️ Sending image via proxy:", proxyUrl);
 
       messages.push({
-        type: "text",
-        text: `問題: ${plain}\n\n${choicesText}\n\n数字で答えてください。`,
+        type: "image",
+        originalContentUrl: proxyUrl,
+        previewImageUrl: proxyUrl,
       });
-
-      await replyLine(event.replyToken, messages);
-      continue;
     }
 
-    // === 数字回答 ===
-    if (/^\d+$/.test(text)) {
-      const session = userSessions.get(userId);
-      if (!session) {
-        await replyLine(event.replyToken, { text: "先に「問題ちょうだい」と送ってください。" });
-        continue;
-      }
-
-      const idx = parseInt(text, 10) - 1;
-      const choice = session.choices?.[idx];
-      if (!choice) {
-        await replyLine(event.replyToken, { text: "その番号の選択肢はありません。" });
-        continue;
-      }
-
-      const correct = Number(choice.fraction) > 0;
-      const feedback = he.decode(choice.feedback || "").replace(/<[^>]+>/g, "").trim();
-      const result = correct ? "⭕ 正解！" : "❌ 不正解。";
-      const feedbackText = feedback ? `\n\n解説: ${feedback}` : "";
-
-      await replyLine(event.replyToken, { text: `${result}${feedbackText}` });
-      userSessions.delete(userId);
-      continue;
-    }
-
-    // === その他 ===
-    await replyLine(event.replyToken, {
-      text: '「問題ちょうだい」と送ると問題を出します。回答は「1」「2」などの番号で送ってください。',
+    messages.push({
+      type: "text",
+      text: messageText,
     });
-  }
-});
 
-/* =============================
- * Render用: 画像プロキシAPI
- * ============================= */
-app.get("/proxy", async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).send("Missing URL");
+    await client.replyMessage(replyToken, messages);
+    console.log("📤 Sent to LINE:", messages);
+
+  } catch (err) {
+    console.error("❌ Error sending question:", err);
+  }
+}
+
+// ✅ 答えをチェック
+async function checkAnswer(replyToken, userId, userAnswer) {
+  const questionId = userQuestions.get(userId);
+  if (!questionId) {
+    await client.replyMessage(replyToken, {
+      type: "text",
+      text: "まず「問題」と入力してください。",
+    });
+    return;
+  }
 
   try {
-    console.log("🌍 Proxy fetching:", url);
+    const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_check_answer&moodlewsrestformat=json&questionid=${questionId}&answerindex=${userAnswer}`;
+    const response = await axios.get(url);
+    const result = response.data;
+
+    const replyText = result.correct
+      ? `⭕ 正解！ ${result.feedback}`
+      : `❌ 不正解… ${result.feedback}`;
+
+    await client.replyMessage(replyToken, {
+      type: "text",
+      text: replyText,
+    });
+
+    console.log(`📤 Answer checked: ${replyText}`);
+  } catch (err) {
+    console.error("❌ Error checking answer:", err);
+  }
+}
+
+// ✅ HTML内の画像src抽出
+function extractImageSrc(html) {
+  const match = html.match(/src="([^"]+)"/);
+  return match ? match[1] : null;
+}
+
+// ✅ Moodle画像URLの正規化
+function normalizeImageUrl(questionId, src) {
+  if (!src) return null;
+  if (src.startsWith("http")) return src;
+
+  return `https://ik1-449-56991.vs.sakura.ne.jp/webservice/pluginfile.php/1/question/questiontext/${questionId}/${src.replace(
+    "@@PLUGINFILE@@/",
+    ""
+  )}?token=${MOODLE_TOKEN}`;
+}
+
+// ✅ Moodle画像をプロキシ経由で配信
+app.get("/proxy", async (req, res) => {
+  try {
+    const { url } = req.query;
+    if (!url) return res.status(400).send("Missing url");
+
     const response = await axios.get(url, { responseType: "arraybuffer" });
-    res.set("Content-Type", response.headers["content-type"] || "image/jpeg");
+
+    const contentType = response.headers["content-type"] || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
     res.send(response.data);
   } catch (err) {
-    console.error("❌ Proxy fetch error:", err.message);
-    res.status(500).send("Proxy error");
+    console.error("Proxy Error:", err.message);
+    res.status(500).send("Image fetch error");
   }
 });
 
-/* =============================
- * Render監視用
- * ============================= */
-app.get("/", (req, res) => res.send("RENDER ACTIVE: OK"));
-
-app.listen(PORT, () => console.log(`✅ Server running on PORT ${PORT}`));
+// ✅ サーバー起動
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
