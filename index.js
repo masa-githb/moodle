@@ -154,7 +154,7 @@ async function handleEvent(event) {
 // -----------------------------
 // Webhookエンドポイント
 // -----------------------------
-app.post("/callback", middleware(config), async (req, res) => {
+app.post("/webhook", middleware(config), async (req, res) => {
   try {
     await Promise.all(req.body.events.map(handleEvent));
     res.status(200).end();
