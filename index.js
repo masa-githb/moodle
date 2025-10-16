@@ -9,16 +9,19 @@ import { Client, middleware } from "@line/bot-sdk";
 dotenv.config();
 
 const app = express();
-app.use(express.json());
 
+// -----------------------------
 // LINE設定
+// -----------------------------
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 const client = new Client(config);
 
-// Moodle API設定
+// -----------------------------
+// Moodle設定
+// -----------------------------
 const MOODLE_API_URL = process.env.MOODLE_API_URL;
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 
@@ -26,7 +29,7 @@ const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 const userQuestions = new Map();
 
 // -----------------------------
-// HTML内の画像URL抽出関数
+// HTMLから画像URL抽出
 // -----------------------------
 function extractImageUrl(html) {
   try {
@@ -34,7 +37,6 @@ function extractImageUrl(html) {
     const img = $("img").first();
     if (img && img.attr("src")) {
       let src = img.attr("src");
-      // 絶対URLでなければ補完
       if (src.startsWith("/")) {
         src = `https://ik1-449-56991.vs.sakura.ne.jp${src}`;
       }
@@ -154,6 +156,7 @@ async function handleEvent(event) {
 // -----------------------------
 // Webhookエンドポイント
 // -----------------------------
+// ⚠️ express.json() より前に配置すること！
 app.post("/webhook", middleware(config), async (req, res) => {
   try {
     await Promise.all(req.body.events.map(handleEvent));
@@ -164,5 +167,9 @@ app.post("/webhook", middleware(config), async (req, res) => {
   }
 });
 
+// ほかのAPIでJSONを使う場合に備えてここで設定
+app.use(express.json());
+
+// -----------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
