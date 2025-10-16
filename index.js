@@ -1,11 +1,10 @@
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
-import dotenv from "dotenv";
-import { Client } from "@line/bot-sdk";
+import * as cheerio from "cheerio";   // ← これだけ
 import he from "he";
-import cheerio from "cheerio";
-import * as cheerio from "cheerio";  // ← ★ 修正ポイント
+import dotenv from "dotenv";
+import line from "@line/bot-sdk";
 
 dotenv.config();
 
