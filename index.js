@@ -53,7 +53,7 @@ function extractImageUrl(html) {
 // Moodleから問題取得
 // -----------------------------
 async function fetchRandomQuestion() {
-  const url = `${MOODLE_API_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
+  const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
   console.log("🌐 Moodle API URL:", url);
 
   const res = await axios.get(url);
