@@ -22,7 +22,7 @@ const client = new Client(config);
 // -----------------------------
 // Moodle設定
 // -----------------------------
-const MOODLE_API_URL = process.env.MOODLE_API_URL;
+const MOODLE_URL = process.env.MOODLE_URL;
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 
 // ユーザーごとの問題管理
@@ -54,7 +54,7 @@ function extractImageUrl(html) {
 // -----------------------------
 async function fetchRandomQuestion() {
   const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
-  console.log("🌐 Moodle API URL:", url);
+  console.log("🌐 Moodle URL:", url);
 
   const res = await axios.get(url);
   return res.data;
