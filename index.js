@@ -1,10 +1,11 @@
 import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
-import * as cheerio from "cheerio";   // ← これだけ
+import * as cheerio from "cheerio";
 import he from "he";
 import dotenv from "dotenv";
-import line from "@line/bot-sdk";
+import line from "@line/bot-sdk";   // ← ESMでの正しい書き方
+const { Client, middleware } = line; // ← Clientをここで定義
 
 dotenv.config();
 
