@@ -15,14 +15,14 @@ const app = express();
 // -----------------------------
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 const client = new Client(config);
 
 // -----------------------------
 // Moodle設定
 // -----------------------------
-const MOODLE_URL = process.env.MOODLE_URL;
+const MOODLE_URL = process.env.MOODLE_URL; // 例: https://ik1-449-56991.vs.sakura.ne.jp/webservice/rest/server.php
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
 
 // ユーザーごとの問題管理
@@ -37,7 +37,13 @@ function extractImageUrl(html) {
     const img = $("img").first();
     if (img && img.attr("src")) {
       let src = img.attr("src");
-      if (src.startsWith("/")) {
+      // @@PLUGINFILE@@対応 or 相対パス対応
+      if (src.startsWith("@@PLUGINFILE@@")) {
+        src = src.replace(
+          "@@PLUGINFILE@@",
+          "https://ik1-449-56991.vs.sakura.ne.jp/pluginfile.php"
+        );
+      } else if (src.startsWith("/")) {
         src = `https://ik1-449-56991.vs.sakura.ne.jp${src}`;
       }
       console.log("🖼️ 画像URL抽出:", src);
@@ -67,8 +73,8 @@ async function sendQuestion(replyToken, question) {
   try {
     const text = he.decode(question.questiontext.replace(/<[^>]+>/g, ""));
     const imageUrl = extractImageUrl(question.questiontext);
-    let messageText = `問題: ${text}\n\n`;
 
+    let messageText = `📖 問題:\n${text}\n\n`;
     question.choices.forEach((c, i) => {
       messageText += `${i + 1}. ${c.answer}\n`;
     });
@@ -80,19 +86,22 @@ async function sendQuestion(replyToken, question) {
       messages.push({
         type: "image",
         originalContentUrl: imageUrl,
-        previewImageUrl: imageUrl
+        previewImageUrl: imageUrl,
       });
     }
 
     messages.push({
       type: "text",
-      text: messageText
+      text: messageText,
     });
 
     await client.replyMessage(replyToken, messages);
     console.log("✅ 問題送信成功");
   } catch (error) {
-    console.error("❌ sendQuestion エラー:", error.response?.data || error.message);
+    console.error(
+      "❌ sendQuestion エラー:",
+      error.response?.data || error.message
+    );
   }
 }
 
@@ -103,7 +112,7 @@ async function handleAnswer(replyToken, userId, messageText) {
   const q = userQuestions.get(userId);
   if (!q) {
     await client.replyMessage(replyToken, [
-      { type: "text", text: "まず「問題」と送信してください。" }
+      { type: "text", text: "まず「問題」と送信してください。" },
     ]);
     return;
   }
@@ -113,13 +122,15 @@ async function handleAnswer(replyToken, userId, messageText) {
 
   if (!selected) {
     await client.replyMessage(replyToken, [
-      { type: "text", text: "1〜4の数字で答えてください。" }
+      { type: "text", text: "1〜4の数字で答えてください。" },
     ]);
     return;
   }
 
   const correct = selected.fraction === 1;
-  const replyText = correct ? "⭕ 正解です！" : "❌ 不正解です。";
+  const replyText = correct
+    ? `⭕ 正解です！ ${selected.feedback || ""}`
+    : `❌ 不正解です。\n${selected.feedback || ""}`;
 
   await client.replyMessage(replyToken, [{ type: "text", text: replyText }]);
 }
@@ -141,7 +152,7 @@ async function handleEvent(event) {
 
     if (!question || !question.choices) {
       await client.replyMessage(replyToken, [
-        { type: "text", text: "問題を取得できませんでした。" }
+        { type: "text", text: "問題を取得できませんでした。" },
       ]);
       return;
     }
@@ -156,10 +167,11 @@ async function handleEvent(event) {
 // -----------------------------
 // Webhookエンドポイント
 // -----------------------------
-// ⚠️ express.json() より前に配置すること！
+// ⚠️ middleware(config) は express.json() より前に！
 app.post("/webhook", middleware(config), async (req, res) => {
   try {
-    await Promise.all(req.body.events.map(handleEvent));
+    const events = req.body.events;
+    await Promise.all(events.map(handleEvent));
     res.status(200).end();
   } catch (e) {
     console.error("❌ Webhookエラー:", e);
@@ -167,7 +179,7 @@ app.post("/webhook", middleware(config), async (req, res) => {
   }
 });
 
-// ほかのAPIでJSONを使う場合に備えてここで設定
+// ⚠️ express.json() は最後に（他のルート用）
 app.use(express.json());
 
 // -----------------------------
