@@ -35,7 +35,6 @@ function extractImageUrl(html, questionId) {
   try {
     const $ = cheerio.load(html);
     const img = $("img").first();
-
     if (!img || !img.attr("src")) return null;
 
     let src = img.attr("src");
@@ -44,16 +43,19 @@ function extractImageUrl(html, questionId) {
     // すでに絶対URLならそのまま返す
     if (src.startsWith("http")) return src;
 
-    // id から categoryid を推定
-    // あなたのMoodleではおそらくカテゴリごとにid範囲が異なる
-    // 例：1〜80 → 11、81〜100 → 12（必要に応じて調整可能）
-    let categoryId = 11;
-    if (questionId >= 81) categoryId = 12;
-
     // @@PLUGINFILE@@ → Moodle構造に変換
     if (src.includes("@@PLUGINFILE@@")) {
       const filename = src.split("/").pop();
-      src = `${base}/pluginfile.php/2/question/questiontext/${categoryId}/1/${questionId}/${filename}`;
+
+      // 質問本文中に前回の questiontext の番号を含む場合は推測
+      // e.g. /question/questiontext/12/1/88/ → この「12」を自動検出
+      const match = html.match(/questiontext\/(\d+)\//);
+      let contextId = match ? match[1] : "12"; // fallback値（前回の既知値）
+
+      // contextId が整数なら +1 して最新版を参照（Moodleではよく発生する）
+      if (!isNaN(contextId)) contextId = parseInt(contextId) + 1;
+
+      src = `${base}/pluginfile.php/2/question/questiontext/${contextId}/1/${questionId}/${filename}`;
       console.log("🖼️ 画像URL抽出:", src);
       return src;
     }
