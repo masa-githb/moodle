@@ -43,17 +43,16 @@ function extractImageUrl(html, questionId) {
     // すでに絶対URLならそのまま返す
     if (src.startsWith("http")) return src;
 
-    // @@PLUGINFILE@@ → Moodle構造に変換
+    // @@PLUGINFILE@@を含む場合 → Moodle構造に変換
     if (src.includes("@@PLUGINFILE@@")) {
       const filename = src.split("/").pop();
 
-      // 質問本文中に前回の questiontext の番号を含む場合は推測
-      // e.g. /question/questiontext/12/1/88/ → この「12」を自動検出
+      // HTML内から現在の questiontext/数字/ を自動検出
       const match = html.match(/questiontext\/(\d+)\//);
-      let contextId = match ? match[1] : "12"; // fallback値（前回の既知値）
+      let contextId = match ? parseInt(match[1], 10) : 12;
 
-      // contextId が整数なら +1 して最新版を参照（Moodleではよく発生する）
-      if (!isNaN(contextId)) contextId = parseInt(contextId) + 1;
+      // Moodleの仕様上、毎回 questiontext のフォルダが +1 される傾向あり
+      contextId++;
 
       src = `${base}/pluginfile.php/2/question/questiontext/${contextId}/1/${questionId}/${filename}`;
       console.log("🖼️ 画像URL抽出:", src);
