@@ -42,16 +42,18 @@ function extractImageUrl(html, questionId) {
     const base = "https://ik1-449-56991.vs.sakura.ne.jp";
 
     // すでに絶対URLならそのまま返す
-    if (src.startsWith("http")) {
-      console.log("🖼️ 画像URL抽出(絶対URL):", src);
-      return src;
-    }
+    if (src.startsWith("http")) return src;
 
-    // @@PLUGINFILE@@ の場合 → 正しい Moodle 構造で補完
+    // id から categoryid を推定
+    // あなたのMoodleではおそらくカテゴリごとにid範囲が異なる
+    // 例：1〜80 → 11、81〜100 → 12（必要に応じて調整可能）
+    let categoryId = 11;
+    if (questionId >= 81) categoryId = 12;
+
+    // @@PLUGINFILE@@ → Moodle構造に変換
     if (src.includes("@@PLUGINFILE@@")) {
       const filename = src.split("/").pop();
-      // あなたのMoodleでは categoryid=11 が正しい
-      src = `${base}/pluginfile.php/2/question/questiontext/11/1/${questionId}/${filename}`;
+      src = `${base}/pluginfile.php/2/question/questiontext/${categoryId}/1/${questionId}/${filename}`;
       console.log("🖼️ 画像URL抽出:", src);
       return src;
     }
