@@ -43,20 +43,28 @@ function extractImageUrl(html, questionId) {
     // すでに絶対URLならそのまま返す
     if (src.startsWith("http")) return src;
 
-    // @@PLUGINFILE@@を含む場合 → Moodle構造に変換
     if (src.includes("@@PLUGINFILE@@")) {
       const filename = src.split("/").pop();
 
-      // HTML内から現在の questiontext/数字/ を自動検出
+      // HTMLから推定できるquestiontext番号を取得
       const match = html.match(/questiontext\/(\d+)\//);
       let contextId = match ? parseInt(match[1], 10) : 12;
 
-      // Moodleの仕様上、毎回 questiontext のフォルダが +1 される傾向あり
-      contextId++;
+      // 試行候補を複数生成（+1, +2）
+      const candidates = [
+        `${base}/pluginfile.php/2/question/questiontext/${contextId}/1/${questionId}/${filename}`,
+        `${base}/pluginfile.php/2/question/questiontext/${contextId + 1}/1/${questionId}/${filename}`,
+        `${base}/pluginfile.php/2/question/questiontext/${contextId + 2}/1/${questionId}/${filename}`,
+        // Moodleの保存が1ずれる場合に備えて questionId+1 版も試す
+        `${base}/pluginfile.php/2/question/questiontext/${contextId + 2}/1/${questionId + 1}/${filename}`,
+      ];
 
-      src = `${base}/pluginfile.php/2/question/questiontext/${contextId}/1/${questionId}/${filename}`;
-      console.log("🖼️ 画像URL抽出:", src);
-      return src;
+      console.log("🧭 試行候補URL:", candidates);
+
+      // とりあえず最初の候補を返す（本番ではfetch確認して最初に200返したものを採用も可）
+      const selected = candidates[0];
+      console.log("🖼️ 画像URL抽出:", selected);
+      return selected;
     }
 
     // "/" から始まる相対パス
