@@ -47,26 +47,13 @@ function extractImageUrl(html, questionId) {
       return src;
     }
 
-    // @@PLUGINFILE@@ が含まれる場合
+    // @@PLUGINFILE@@ の場合 → 正しい Moodle 構造で補完
     if (src.includes("@@PLUGINFILE@@")) {
-      // ファイル名を抽出
       const filename = src.split("/").pop();
-
-      // --- 自動推測ロジック ---
-      // contextid(2), categoryid(8〜9), slot(1), questionId で構築
-      // Moodleでは contextid=2 が通常の「システム」コンテキストとして多い
-      // カテゴリID (8 or 9) は、質問データから固定推測できる
-      const likelyCategoryIds = [8, 9];
-      const contextId = 2;
-      const slot = 1;
-
-      // 順に試す
-      for (const categoryId of likelyCategoryIds) {
-        const testUrl = `${base}/pluginfile.php/${contextId}/question/questiontext/${categoryId}/${slot}/${questionId}/${filename}`;
-        console.log("🔍 試行URL:", testUrl);
-        // テスト段階では最初の構造で返す
-        return testUrl;
-      }
+      // あなたのMoodleでは categoryid=11 が正しい
+      src = `${base}/pluginfile.php/2/question/questiontext/11/1/${questionId}/${filename}`;
+      console.log("🖼️ 画像URL抽出:", src);
+      return src;
     }
 
     // "/" から始まる相対パス
@@ -76,7 +63,7 @@ function extractImageUrl(html, questionId) {
       return src;
     }
 
-    // その他の相対パス（pluginfile.php/...など）
+    // その他の相対パス
     src = `${base}/${src}`;
     console.log("🖼️ 画像URL抽出(その他相対):", src);
     return src;
@@ -103,7 +90,7 @@ async function fetchRandomQuestion() {
 async function sendQuestion(replyToken, question) {
   try {
     const text = he.decode(question.questiontext.replace(/<[^>]+>/g, ""));
-    const imageUrl = extractImageUrl(question.questiontext);
+    const imageUrl = extractImageUrl(question.questiontext, question.id);
 
     let messageText = `📖 問題:\n${text}\n\n`;
     question.choices.forEach((c, i) => {
