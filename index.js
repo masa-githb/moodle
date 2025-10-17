@@ -31,28 +31,59 @@ const userQuestions = new Map();
 // -----------------------------
 // HTMLから画像URL抽出
 // -----------------------------
-function extractImageUrl(html) {
+function extractImageUrl(html, questionId) {
   try {
     const $ = cheerio.load(html);
     const img = $("img").first();
-    if (img && img.attr("src")) {
-      let src = img.attr("src");
-      // @@PLUGINFILE@@対応 or 相対パス対応
-      if (src.startsWith("@@PLUGINFILE@@")) {
-        src = src.replace(
-          "@@PLUGINFILE@@",
-          "https://ik1-449-56991.vs.sakura.ne.jp/pluginfile.php"
-        );
-      } else if (src.startsWith("/")) {
-        src = `https://ik1-449-56991.vs.sakura.ne.jp${src}`;
-      }
-      console.log("🖼️ 画像URL抽出:", src);
+
+    if (!img || !img.attr("src")) return null;
+
+    let src = img.attr("src");
+    const base = "https://ik1-449-56991.vs.sakura.ne.jp";
+
+    // すでに絶対URLならそのまま返す
+    if (src.startsWith("http")) {
+      console.log("🖼️ 画像URL抽出(絶対URL):", src);
       return src;
     }
+
+    // @@PLUGINFILE@@ が含まれる場合
+    if (src.includes("@@PLUGINFILE@@")) {
+      // ファイル名を抽出
+      const filename = src.split("/").pop();
+
+      // --- 自動推測ロジック ---
+      // contextid(2), categoryid(8〜9), slot(1), questionId で構築
+      // Moodleでは contextid=2 が通常の「システム」コンテキストとして多い
+      // カテゴリID (8 or 9) は、質問データから固定推測できる
+      const likelyCategoryIds = [8, 9];
+      const contextId = 2;
+      const slot = 1;
+
+      // 順に試す
+      for (const categoryId of likelyCategoryIds) {
+        const testUrl = `${base}/pluginfile.php/${contextId}/question/questiontext/${categoryId}/${slot}/${questionId}/${filename}`;
+        console.log("🔍 試行URL:", testUrl);
+        // テスト段階では最初の構造で返す
+        return testUrl;
+      }
+    }
+
+    // "/" から始まる相対パス
+    if (src.startsWith("/")) {
+      src = `${base}${src}`;
+      console.log("🖼️ 画像URL抽出(相対):", src);
+      return src;
+    }
+
+    // その他の相対パス（pluginfile.php/...など）
+    src = `${base}/${src}`;
+    console.log("🖼️ 画像URL抽出(その他相対):", src);
+    return src;
   } catch (e) {
     console.error("⚠️ extractImageUrlエラー:", e.message);
+    return null;
   }
-  return null;
 }
 
 // -----------------------------
