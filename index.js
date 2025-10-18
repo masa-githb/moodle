@@ -4,6 +4,9 @@ import axios from "axios";
 import * as cheerio from "cheerio";
 import dotenv from "dotenv";
 import he from "he";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { Client, middleware } from "@line/bot-sdk";
 
 dotenv.config();
@@ -22,16 +25,31 @@ const client = new Client(config);
 // -----------------------------
 // Moodle設定
 // -----------------------------
-const MOODLE_URL = process.env.MOODLE_URL; // 例: https://ik1-449-56991.vs.sakura.ne.jp/webservice/rest/server.php
+const MOODLE_URL = process.env.MOODLE_URL;
 const MOODLE_TOKEN = process.env.MOODLE_TOKEN;
+
+// -----------------------------
+// パス設定
+// -----------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PUBLIC_DIR = path.join(__dirname, "public", "images");
+
+// public/imagesディレクトリを作成（存在しない場合）
+if (!fs.existsSync(PUBLIC_DIR)) {
+  fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+}
+
+// Expressで静的ファイルを公開
+app.use("/images", express.static(PUBLIC_DIR));
 
 // ユーザーごとの問題管理
 const userQuestions = new Map();
 
 // -----------------------------
-// HTMLから画像URL抽出
+// HTMLから画像URL抽出 ＆ ローカルコピー
 // -----------------------------
-function extractImageUrl(html, questionId) {
+async function extractAndSaveImage(html, questionId) {
   try {
     const $ = cheerio.load(html);
     const img = $("img").first();
@@ -40,38 +58,36 @@ function extractImageUrl(html, questionId) {
     let src = img.attr("src");
     const base = "https://ik1-449-56991.vs.sakura.ne.jp";
 
-    // すでに絶対URLならそのまま返す
-    if (src.startsWith("http")) return src;
-
     if (src.includes("@@PLUGINFILE@@")) {
       const filename = src.split("/").pop();
-
-      // questiontext の番号（contextId）をHTMLから抽出
       const match = html.match(/questiontext\/(\d+)\//);
       let contextId = match ? parseInt(match[1], 10) : 12;
-
-      // contextId + 3 を採用
       const fixedContextId = contextId + 3;
 
-      // URLを生成
       const srcUrl = `${base}/pluginfile.php/2/question/questiontext/${fixedContextId}/1/${questionId}/${filename}`;
       console.log("🖼️ 画像URL抽出:", srcUrl);
-      return srcUrl;
+
+      // 画像をダウンロードして保存
+      const localPath = path.join(PUBLIC_DIR, filename);
+      try {
+        const res = await axios.get(srcUrl, {
+          responseType: "arraybuffer",
+          headers: { Authorization: `Bearer ${MOODLE_TOKEN}` }, // Moodleがトークン認証対応なら
+        });
+        fs.writeFileSync(localPath, res.data);
+        console.log("📁 画像保存:", localPath);
+      } catch (err) {
+        console.error("⚠️ 画像ダウンロード失敗:", err.message);
+        return null;
+      }
+
+      // 公開URLを返す（例: https://yourdomain.com/images/Irukaansatsuzu.jpg）
+      return `${process.env.PUBLIC_BASE_URL}/images/${filename}`;
     }
 
-    // "/" から始まる相対パス
-    if (src.startsWith("/")) {
-      src = `${base}${src}`;
-      console.log("🖼️ 画像URL抽出(相対):", src);
-      return src;
-    }
-
-    // その他の相対パス
-    src = `${base}/${src}`;
-    console.log("🖼️ 画像URL抽出(その他相対):", src);
-    return src;
+    return null;
   } catch (e) {
-    console.error("⚠️ extractImageUrlエラー:", e.message);
+    console.error("⚠️ extractAndSaveImageエラー:", e.message);
     return null;
   }
 }
@@ -82,7 +98,6 @@ function extractImageUrl(html, questionId) {
 async function fetchRandomQuestion() {
   const url = `${MOODLE_URL}?wstoken=${MOODLE_TOKEN}&wsfunction=local_questionapi_get_random_question&moodlewsrestformat=json`;
   console.log("🌐 Moodle URL:", url);
-
   const res = await axios.get(url);
   return res.data;
 }
@@ -93,7 +108,7 @@ async function fetchRandomQuestion() {
 async function sendQuestion(replyToken, question) {
   try {
     const text = he.decode(question.questiontext.replace(/<[^>]+>/g, ""));
-    const imageUrl = extractImageUrl(question.questiontext, question.id);
+    const imageUrl = await extractAndSaveImage(question.questiontext, question.id);
 
     let messageText = `📖 問題:\n${text}\n\n`;
     question.choices.forEach((c, i) => {
@@ -111,18 +126,12 @@ async function sendQuestion(replyToken, question) {
       });
     }
 
-    messages.push({
-      type: "text",
-      text: messageText,
-    });
+    messages.push({ type: "text", text: messageText });
 
     await client.replyMessage(replyToken, messages);
     console.log("✅ 問題送信成功");
   } catch (error) {
-    console.error(
-      "❌ sendQuestion エラー:",
-      error.response?.data || error.message
-    );
+    console.error("❌ sendQuestion エラー:", error.response?.data || error.message);
   }
 }
 
@@ -132,9 +141,7 @@ async function sendQuestion(replyToken, question) {
 async function handleAnswer(replyToken, userId, messageText) {
   const q = userQuestions.get(userId);
   if (!q) {
-    await client.replyMessage(replyToken, [
-      { type: "text", text: "まず「問題」と送信してください。" },
-    ]);
+    await client.replyMessage(replyToken, [{ type: "text", text: "まず「問題」と送信してください。" }]);
     return;
   }
 
@@ -142,9 +149,7 @@ async function handleAnswer(replyToken, userId, messageText) {
   const selected = q.choices[choiceNum - 1];
 
   if (!selected) {
-    await client.replyMessage(replyToken, [
-      { type: "text", text: "1〜4の数字で答えてください。" },
-    ]);
+    await client.replyMessage(replyToken, [{ type: "text", text: "1〜4の数字で答えてください。" }]);
     return;
   }
 
@@ -172,9 +177,7 @@ async function handleEvent(event) {
     console.log("📥 Moodleから取得:", question);
 
     if (!question || !question.choices) {
-      await client.replyMessage(replyToken, [
-        { type: "text", text: "問題を取得できませんでした。" },
-      ]);
+      await client.replyMessage(replyToken, [{ type: "text", text: "問題を取得できませんでした。" }]);
       return;
     }
 
@@ -188,7 +191,6 @@ async function handleEvent(event) {
 // -----------------------------
 // Webhookエンドポイント
 // -----------------------------
-// ⚠️ middleware(config) は express.json() より前に！
 app.post("/webhook", middleware(config), async (req, res) => {
   try {
     const events = req.body.events;
@@ -200,7 +202,6 @@ app.post("/webhook", middleware(config), async (req, res) => {
   }
 });
 
-// ⚠️ express.json() は最後に（他のルート用）
 app.use(express.json());
 
 // -----------------------------
